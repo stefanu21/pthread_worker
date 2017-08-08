@@ -9,25 +9,77 @@
 #include "log.h"
 #include "pthread_worker.h"
 
- void *locked_worker_callback(struct pthread_worker_worker_obj_t *obj, struct dllist *list)
+
+struct dummy_list_t 
 {
-	logg_err("call");
+	char *text;
+	struct dllist link;
+};
+
+ void *unlocked_worker_callback(int id, struct dllist *list, void *custom)
+{
 	return NULL;
 }
 
-void *unlocked_worker_callback(struct pthread_worker_worker_obj_t *obj, struct dllist *list)
+void *locked_worker_callback(int id, struct dllist *list, void *custom)
 {
-	logg_err("call");
+	struct dummy_list_t *dummy = container_of(list->prev, struct dummy_list_t, link);
+
+	dllist_remove(list->prev);
+
+	logg_err("(%d) call %s", id, dummy->text);
+	free(dummy->text);
+	free(dummy);
 	return NULL;
 }
 
-int cond_list_insert_callback(struct pthread_worker_main_obj_t *obj, struct dllist *list)
+int cond_list_insert_callback(struct dllist *list, void *custom)
 {	
+	static int i = 1;
+
+	if(!i--)
+	{	
+		int u = 0;
+		for (u = 0; u < 5; u++)
+		{
+			struct dummy_list_t *dummy = calloc(1, sizeof(*dummy));
+			if(!dummy)
+			{
+				logg_err("calloc error");
+				return 0;
+			}
+			if(asprintf(&dummy->text, "hello %d", rand()) < 0)
+			{
+				logg_err("asprintf error");
+				free(dummy);
+				return 0;
+			} 
+
+			logg_err("signal %s", dummy->text);
+			dllist_insert(list, &dummy->link);
+		}
+		i = 1;
+		return 1;
+	}
+
 	logg_err("check list");
 	return 0;
 }
 
-void cond_list_destroy_callback(struct pthread_worker_main_obj_t *obj, struct dllist *list)
+void cond_list_destroy_callback(struct dllist *list, void *custom)
+{
+	struct dummy_list_t *dummy, *tmp;
+	logg_err("call, size %d", dllist_length(list));
+
+	dllist_for_each_safe(dummy, tmp, list, link)
+	{
+		dllist_remove(&dummy->link);
+		free(dummy->text);
+		free(dummy);
+	}
+}
+
+void custom_destroy_callback(void *custom)
 {
 	logg_err("call");
 }
@@ -35,23 +87,23 @@ void cond_list_destroy_callback(struct pthread_worker_main_obj_t *obj, struct dl
 int main(int argc, char *argv[])
 {
 	struct pthread_worker_main_obj_t *p_upload_worker_obj;
-	int i = 10;
+	int i = 3;
 	struct pthread_worker_callbacks_t callbacks = { .locked_worker_callback = locked_worker_callback,
-							.unlocked_worker_callback = unlocked_worker_callback,
-							.cond_list_insert_callback = cond_list_insert_callback,
-							.cond_list_destroy_callback = cond_list_destroy_callback,
-						      };
+		.unlocked_worker_callback = unlocked_worker_callback,
+		.cond_list_insert_callback = cond_list_insert_callback,
+		.cond_list_destroy_callback = cond_list_destroy_callback,
+		.custom_destroy_callback = custom_destroy_callback,
+	};
 	log_open("demo");
 
-	p_upload_worker_obj = pthread_worker_init(5, &callbacks);
+	p_upload_worker_obj = pthread_worker_init(5, &callbacks, NULL);
 
 	if(!p_upload_worker_obj)
 	{
 		logg_err("error alloc user_data");
 		exit(EXIT_FAILURE);
 	}
-	
-	sleep(5);
+
 	pthread_worker_start(p_upload_worker_obj);
 
 	while(i)
@@ -61,7 +113,8 @@ int main(int argc, char *argv[])
 	}
 
 	pthread_worker_stop(p_upload_worker_obj);
-
+	sleep(5);
+	pthread_worker_start(p_upload_worker_obj);
 	sleep(5);
 	pthread_worker_destroy(p_upload_worker_obj);
 	exit(EXIT_SUCCESS);

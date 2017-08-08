@@ -18,11 +18,13 @@ struct pthread_worker_main_obj_t
 	pthread_cond_t *cond_var;
 	pthread_mutex_t *cond_mutex;
 	struct dllist cond_list;
+	void *custom;
  	struct pthread_worker_worker_obj_t *worker_obj;
-	void *(*locked_worker_callback)(struct pthread_worker_worker_obj_t *, struct dllist *);
-	void *(*unlocked_worker_callback)(struct pthread_worker_worker_obj_t *, struct dllist *);
-	int (*cond_list_insert_callback)(struct pthread_worker_main_obj_t *, struct dllist *);
-	void (*cond_list_destroy_callback)(struct pthread_worker_main_obj_t *, struct dllist *);
+	void *(*locked_worker_callback)(int index, struct dllist *, void *);
+	void *(*unlocked_worker_callback)(int index, struct dllist *, void *);
+	int (*cond_list_insert_callback)(struct dllist *, void *);
+	void (*cond_list_destroy_callback)(struct dllist *, void *);
+	void (*custom_destroy_callback)(void *);
 };
 
 struct pthread_worker_worker_obj_t
@@ -31,10 +33,12 @@ struct pthread_worker_worker_obj_t
 	pthread_mutex_t *cond_mutex;
 	pthread_mutex_t obj_mutex;	
 	pthread_t thread_id;
+	int index;
 	struct dllist *cond_list;
+	void *custom;
 	enum pthread_worker_status_t *service_status;
-	void *(*locked_worker_callback)(struct pthread_worker_worker_obj_t *, struct dllist *);
-	void *(*unlocked_worker_callback)(struct pthread_worker_worker_obj_t *, struct dllist *);
+	void *(*locked_worker_callback)(int index, struct dllist *, void *);
+	void *(*unlocked_worker_callback)(int index, struct dllist *, void *);
 };
 
 static int pthread_worker_mutex_trylock(pthread_mutex_t *mutex, time_t retry_us, void *user_data, int (*mutex_busy_callback)(void *))
@@ -87,20 +91,6 @@ static int callback_worker_signal_lock(void *arg)
 	return 0;
 }
 
-/*
-static int callback_worker_startup(void *arg)
-{
-	struct pthread_worker_worker_obj_t *p_worker_obj = (struct pthread_worker_worker_obj_t *)arg;
-
-	if(*(p_worker_obj->service_status) == PTHREAD_WORKER_STATUS_STOPPED)
-	{
-		logg_err("service stopped");
-		return -1;
-	}
-	else
-		return 0;
-}
-*/
 static void *pthread_worker_callback(void *arg)
 {
 	struct pthread_worker_worker_obj_t *p_worker_obj = (struct pthread_worker_worker_obj_t *)arg;
@@ -151,12 +141,12 @@ static void *pthread_worker_callback(void *arg)
 		}
 
 		if(p_worker_obj->locked_worker_callback)
-			p_worker_obj->locked_worker_callback(p_worker_obj, p_worker_obj->cond_list);
+			p_worker_obj->locked_worker_callback(p_worker_obj->index, p_worker_obj->cond_list, p_worker_obj->custom);
 
 		pthread_worker_mutex_unlock(cond_mutex);
 
 		if(p_worker_obj->unlocked_worker_callback)
-			p_worker_obj->unlocked_worker_callback(p_worker_obj, p_worker_obj->cond_list);
+			p_worker_obj->unlocked_worker_callback(p_worker_obj->index, p_worker_obj->cond_list, p_worker_obj->custom);
 	}
 	return NULL;
 }
@@ -188,7 +178,7 @@ static void *pthread_main_callback(void *arg)
 		{	
 			continue;
 		}
-		if(p_main_obj->cond_list_insert_callback(p_main_obj, &p_main_obj->cond_list) == 1)
+		if(p_main_obj->cond_list_insert_callback(&p_main_obj->cond_list, p_main_obj->custom) == 1)
 		{
 			pthread_cond_signal(p_main_obj->cond_var);
 		}
@@ -198,7 +188,7 @@ static void *pthread_main_callback(void *arg)
 	return NULL;
 }
 
-struct pthread_worker_main_obj_t *pthread_worker_init(unsigned char nr_worker_threads, struct pthread_worker_callbacks_t *callbacks)
+struct pthread_worker_main_obj_t *pthread_worker_init(unsigned char nr_worker_threads, struct pthread_worker_callbacks_t *callbacks, void *custom)
 {
 	struct pthread_worker_main_obj_t *p_main_obj;	
 	void *ret = NULL;
@@ -219,12 +209,14 @@ struct pthread_worker_main_obj_t *pthread_worker_init(unsigned char nr_worker_th
 	p_main_obj->nr_worker_threads = nr_worker_threads;
 	p_main_obj->cond_var = calloc(1, sizeof(*(p_main_obj->cond_var)));
 	p_main_obj->cond_mutex = calloc(1, sizeof(*(p_main_obj->cond_mutex)));
+	p_main_obj->custom = custom;
 	dllist_init(&p_main_obj->cond_list);
 
 	p_main_obj->locked_worker_callback = callbacks->locked_worker_callback;
 	p_main_obj->unlocked_worker_callback = callbacks->unlocked_worker_callback;
 	p_main_obj->cond_list_insert_callback = callbacks->cond_list_insert_callback;
 	p_main_obj->cond_list_destroy_callback = callbacks->cond_list_destroy_callback;
+	p_main_obj->custom_destroy_callback = callbacks->custom_destroy_callback;
 
 	if(!(p_main_obj->cond_var) || (pthread_cond_init(p_main_obj->cond_var, NULL) != 0))
 	{
@@ -254,11 +246,12 @@ struct pthread_worker_main_obj_t *pthread_worker_init(unsigned char nr_worker_th
 	{
 		p_main_obj->worker_obj[i].cond_var = p_main_obj->cond_var;
 		p_main_obj->worker_obj[i].cond_mutex = p_main_obj->cond_mutex;
-
+		p_main_obj->worker_obj[i].custom = custom;
 		p_main_obj->worker_obj[i].service_status = &p_main_obj->service_status;
 		p_main_obj->worker_obj[i].locked_worker_callback = p_main_obj->locked_worker_callback;
 		p_main_obj->worker_obj[i].unlocked_worker_callback = p_main_obj->unlocked_worker_callback;
 		p_main_obj->worker_obj[i].cond_list = &p_main_obj->cond_list; 
+		p_main_obj->worker_obj[i].index = i;
 
 		if(pthread_mutex_init(&p_main_obj->worker_obj[i].obj_mutex, NULL) != 0)
 		{	
@@ -318,10 +311,12 @@ void pthread_worker_destroy(struct pthread_worker_main_obj_t *p_main_obj)
 		pthread_join(p_main_obj->worker_obj[i].thread_id, &ret);
 
 	if((dllist_empty(&p_main_obj->cond_list) != 1) && (p_main_obj->cond_list_destroy_callback != NULL))
-		p_main_obj->cond_list_destroy_callback(p_main_obj, &p_main_obj->cond_list);	
+		p_main_obj->cond_list_destroy_callback(&p_main_obj->cond_list, p_main_obj->custom);	
 	pthread_mutex_destroy(p_main_obj->cond_mutex);
 	pthread_cond_destroy(p_main_obj->cond_var);
 	
+	if(p_main_obj->custom && p_main_obj->custom_destroy_callback)
+		p_main_obj->custom_destroy_callback(p_main_obj->custom);	
 	free(p_main_obj->cond_var);
 	free(p_main_obj->cond_mutex);
 	free(p_main_obj->worker_obj);
