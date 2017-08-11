@@ -15,10 +15,11 @@ struct pthread_worker_worker_obj_t;
 
 struct pthread_worker_callbacks_t
 {
-        void *(*locked_worker_callback)(int index, struct dllist *, void *);
-        void *(*unlocked_worker_callback)(int index, struct dllist *, void *);
-        int (*cond_list_insert_callback)(struct dllist *, void *);
-        void (*cond_list_destroy_callback)(struct dllist *, void *);
+	void *(*locked_worker_callback)(int index, struct dllist *, void *);
+	void *(*unlocked_worker_callback)(int index, struct dllist *, void *);
+	int (*locked_main_callback)(struct dllist *, void *);
+	int (*unlocked_main_callback)(void *);
+	void (*cond_list_destroy_callback)(struct dllist *, void *);
 	void (*custom_destroy_callback)(void *);
 };
 

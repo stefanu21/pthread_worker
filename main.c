@@ -33,7 +33,7 @@ void *locked_worker_callback(int id, struct dllist *list, void *custom)
 	return NULL;
 }
 
-int cond_list_insert_callback(struct dllist *list, void *custom)
+int locked_main_callback(struct dllist *list, void *custom)
 {	
 	static int i = 1;
 
@@ -66,6 +66,12 @@ int cond_list_insert_callback(struct dllist *list, void *custom)
 	return 0;
 }
 
+int unlocked_main_callback(void *custom)
+{
+	sleep(1);
+	return 0;
+}
+
 void cond_list_destroy_callback(struct dllist *list, void *custom)
 {
 	struct dummy_list_t *dummy, *tmp;
@@ -90,7 +96,8 @@ int main(int argc, char *argv[])
 	int i = 3;
 	struct pthread_worker_callbacks_t callbacks = { .locked_worker_callback = locked_worker_callback,
 		.unlocked_worker_callback = unlocked_worker_callback,
-		.cond_list_insert_callback = cond_list_insert_callback,
+		.locked_main_callback = locked_main_callback,
+		.unlocked_main_callback = unlocked_main_callback,
 		.cond_list_destroy_callback = cond_list_destroy_callback,
 		.custom_destroy_callback = custom_destroy_callback,
 	};

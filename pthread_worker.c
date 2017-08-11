@@ -22,7 +22,8 @@ struct pthread_worker_main_obj_t
  	struct pthread_worker_worker_obj_t *worker_obj;
 	void *(*locked_worker_callback)(int index, struct dllist *, void *);
 	void *(*unlocked_worker_callback)(int index, struct dllist *, void *);
-	int (*cond_list_insert_callback)(struct dllist *, void *);
+	int (*locked_main_callback)(struct dllist *, void *);
+	int (*unlocked_main_callback)(void *);
 	void (*cond_list_destroy_callback)(struct dllist *, void *);
 	void (*custom_destroy_callback)(void *);
 };
@@ -178,12 +179,20 @@ static void *pthread_main_callback(void *arg)
 		{	
 			continue;
 		}
-		if(p_main_obj->cond_list_insert_callback(&p_main_obj->cond_list, p_main_obj->custom) == 1)
+		if(p_main_obj->locked_main_callback(&p_main_obj->cond_list, p_main_obj->custom) == 1)
 		{
 			pthread_cond_signal(p_main_obj->cond_var);
 		}
 		pthread_mutex_unlock(p_main_obj->cond_mutex);
-		usleep(100 * 1000);
+
+		if(p_main_obj->unlocked_main_callback)
+		{
+			if(p_main_obj->unlocked_main_callback(&p_main_obj->custom) < 0)
+				p_main_obj->service_status = PTHREAD_WORKER_STATUS_DESTROYED;
+		} else
+		{
+			usleep(100 * 1000);
+		}
 	}
 	return NULL;
 }
@@ -214,7 +223,8 @@ struct pthread_worker_main_obj_t *pthread_worker_init(unsigned char nr_worker_th
 
 	p_main_obj->locked_worker_callback = callbacks->locked_worker_callback;
 	p_main_obj->unlocked_worker_callback = callbacks->unlocked_worker_callback;
-	p_main_obj->cond_list_insert_callback = callbacks->cond_list_insert_callback;
+	p_main_obj->locked_main_callback = callbacks->locked_main_callback;
+	p_main_obj->unlocked_main_callback = callbacks->unlocked_main_callback;
 	p_main_obj->cond_list_destroy_callback = callbacks->cond_list_destroy_callback;
 	p_main_obj->custom_destroy_callback = callbacks->custom_destroy_callback;
 
